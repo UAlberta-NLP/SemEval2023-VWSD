@@ -1,2 +1,5 @@
 venv/
+.DS_Store
+__pycache__
+consec/checkpoints/consec_wngt_best.ckpt
 semeval-2023-task-1-V-WSD-trial-v1.tar.gz
