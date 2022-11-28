@@ -1,16 +1,19 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, List
+from typing import Iterator, List, Optional
 import fire
 from bs4 import BeautifulSoup
 import os
 
 import spacy
-from spacy.matcher import Matcher
+from spacy.matcher import Matcher 
+from spacy.tokenizer import Tokenizer
 from consec.src.utils.wsd import pos_map
+import re
 
 nlp = spacy.load("en_core_web_sm")
 matcher = Matcher(nlp.vocab)
+nlp.tokenizer = Tokenizer(nlp.vocab, token_match=re.compile(r"[^ ]+").match)
 wsd_pos_map = {"v": "VERB", "n": "NOUN", "a": "ADJ", "r": "ADV"}
 
 
@@ -23,14 +26,17 @@ class Instance:
     pos_tag: str
 
 
-def prepare_text(text: str, lemma: str, id: str) -> Instance:
+def prepare_text(text: str, lemma: str, id: str) -> Optional[Instance]:
     doc = nlp(text)
 
     patterns = [[{"LOWER": lemma.lower()}], [{"LEMMA": lemma.lower()}]]
     matcher.add("lemma_match", patterns)
     matches = matcher(doc)
 
-    assert len(matches) >= 1
+    if not matches:
+        print(f"Could not parse {text=}; {lemma=}")
+        return None
+
     match_id, start, end = matches[0]
     assert end == (start + 1)
     tokens = [t.text for t in doc]
@@ -38,13 +44,12 @@ def prepare_text(text: str, lemma: str, id: str) -> Instance:
     target_position = start
 
     matcher.remove("lemma_match")
-
     instance = Instance(
         id=id,
         tokens=tokens,
         target_position=target_position,
         lemma=lemma,
-        pos_tag=pos_map[pos],
+        pos_tag=pos_map.get(pos, "n"),
     )
 
     return instance
@@ -57,11 +62,13 @@ def read_se23(path: Path) -> Iterator[Instance]:
             lemma, text = data[0], data[1]
 
             instance = prepare_text(text, lemma, str(line_number))
+            if instance is not None:
+                yield instance
 
-            yield instance
 
-
-def build_raganato_dataset(dataset_path: str, output_folder: str):
+def build_raganato_dataset(
+    dataset_path: str, output_folder: str, use_only_nouns: bool = False
+):
     soup = BeautifulSoup("", "xml", preserve_whitespace_tags=["wf", "instance"])
     corpus_tag = soup.new_tag("corpus", lang="en", source="source")
     text_tag = soup.new_tag("text", id="XXX")
@@ -77,7 +84,10 @@ def build_raganato_dataset(dataset_path: str, output_folder: str):
             if idx == instance.target_position:
                 token_tag = soup.new_tag("instance")
                 token_tag["lemma"] = instance.lemma
-                token_tag["pos"] = wsd_pos_map[pos_map[instance.pos_tag]]
+                if use_only_nouns:
+                    token_tag["pos"] = "NOUN"
+                else:
+                    token_tag["pos"] = wsd_pos_map[instance.pos_tag]
                 token_tag["id"] = instance.id
             else:
                 token_tag = soup.new_tag("wf")
