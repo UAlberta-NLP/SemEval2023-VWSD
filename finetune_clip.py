@@ -6,11 +6,12 @@
   CUDA_VISIBLE_DEVICES=1 nohup python finetune_clip.py --bs 24 --epochs 25 --val_split 0.1 -m openai/clip-vit-large-patch14 --lr 1e-8 > l14_finetune.out &
 '''
 
+from typing import List
 import argparse
 import glob
 import os
-from time import time
-from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer
+from time import sleep, time
+from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, CLIPFeatureExtractor
 import termcolor
 import torch
 import torch.nn.functional as F
@@ -29,17 +30,16 @@ from torch import nn
 import torchmetrics
 from multiprocessing import cpu_count
 from pytorch_metric_learning import losses
-from utils import cos_sim
+from utils import cos_sim, dot_prod_sim, custom_processor, ParallelLoader
 import wandb
+import einops
+import multiprocessing
+import ctypes
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 Image.MAX_IMAGE_PIXELS = 1000000000
 Image.warnings.simplefilter('ignore')
 INST_SIZ = 10
-
-import sys
-sys.path.append('.')
-from utils import cos_sim, dot_prod_sim, cos_sim_softmax
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data', '-d', default='semeval-2023-task-1-V-WSD-train-v1/train_v1/train.data.v1.txt')
@@ -60,8 +60,6 @@ seed_everything(args.seed)
 base_name = f"{args.model.replace('/', '_')}_seed={args.seed}_val_split={args.val_split}"
 name = f"{base_name}_lr={args.lr}_epochs={args.epochs}_bs={args.bs}"
 
-IMAGE_MAP = {}
-
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 data = [l.strip().split('\t') for l in open(args.data).readlines()]
@@ -72,114 +70,97 @@ model = CLIPModel.from_pretrained(args.model, low_cpu_mem_usage=True).to(device)
 processor = CLIPProcessor.from_pretrained(args.model)
 tokenizer = CLIPTokenizer.from_pretrained(args.model)
 
-class VWSDDataset(Dataset):
-  def __init__(self, focus_words, contexts, gold_images):
-    images = [Image.open(os.path.join(args.image_dir, f)) for f in gold_images]
-    contexts = [c.replace(f, f'"{f}"') for f, c in zip(focus_words, contexts)]
-    self.inputs = processor(text=contexts, images=images, return_tensors="pt", padding=True, truncation=True)
-  
-  def __len__(self):
-    return len(self.contexts)
-  
-  def __getitem__(self, idx):
-    return self.inputs[idx].pixel_values, self.inputs[idx].input_ids
-
 class VWSDDatasetJIT(Dataset):
-  def __init__(self, focus_words, contexts, gold_images, candidate_images, max_tokens=20):
+  def __init__(self, focus_words, contexts, gold_images, candidate_images, loader: ParallelLoader, max_tokens=20):
+    self.loader = loader
     self.max_tokens = max_tokens
-    self.image_paths = [os.path.join(args.image_dir, f) for f in gold_images]
+    self.image_paths = gold_images
     self.contexts = [c.replace(f, f'"{f}"') for f, c in zip(focus_words, contexts)]
-    self.labels = [images.index(gold_images[idx]) for idx, images in enumerate(candidate_images)]
+    self.candidate_images = candidate_images
+    self.gold_labels = [images.index(gold_images[idx]) for idx, images in enumerate(candidate_images)]
     
   def __len__(self):
     return len(self.contexts)
   
-  def __getitem__(self, idx):
-    image = Image.open(self.image_paths[idx])
+  def __getitem__(self, idx) -> tuple:
+    joined_names = '_'.join(self.candidate_images[idx])
+    pixel_values = self.loader.shared_data[joined_names].to(dtype=torch.float32, device=device) # .squeeze(dim=0)
     context = self.contexts[idx]
-    inputs = processor(text=[context], images=[image], return_tensors="pt", padding=True, truncation=True)
-    extra_dims = max(0, self.max_tokens - inputs.input_ids.size(1))
-    padded_tokens = F.pad(inputs.input_ids, (0, extra_dims))
-    return inputs.pixel_values[0], padded_tokens[0], idx, self.labels[idx]
+    input_ids = processor(text=[context], return_tensors="pt", padding=True, truncation=True).input_ids
+    extra_dims = max(0, self.max_tokens - input_ids.size(1))
+    input_ids = F.pad(input_ids, (0, extra_dims)).squeeze(dim=0)
+    return self.gold_labels[idx], pixel_values, input_ids, idx
 
 # TODO: Use samples with alternative focus words as negatives?
 class CLIPWrapper(LightningModule):
-  def __init__(self, model, candidate_paths, **kwargs):
-    global IMAGE_MAP
-    
+  def __init__(self, model, candidate_data, **kwargs):
     super().__init__()
-    self.model = model.train() # .to(device)
-    self.candidate_paths = candidate_paths
-    # TODO: self.loss_func = losses.ContrastiveLoss(pos_margin=0, neg_margin=1)
+    self.model = model.train()
+    self.candidate_data = candidate_data
     self.val_acc, self.val_loss, self.val_mrr = [np.array([])] * 3
-    
-    os.makedirs('.cache', exist_ok=True)
-    cache_name = f'cache_{base_name}'
-    self.persist = f'.cache/{cache_name}.pt'
-    self.made_update = False
-    can_load = os.path.exists(self.persist)
-    assert IMAGE_MAP == {}
-    if can_load:
-      IMAGE_MAP = torch.load(self.persist)
-      print(f'Loading {self.persist}... with {len(IMAGE_MAP)} keys')
 
   def forward(self, pixel_values, input_ids):
-    outputs = model(pixel_values=pixel_values, input_ids=input_ids)
-    y_image = outputs.image_embeds
-    y_text = outputs.text_embeds
-    return y_image, y_text
+    # outputs = model(pixel_values=pixel_values, input_ids=input_ids)
+    image_outputs = model.get_image_features(pixel_values=pixel_values)
+    text_outputs = model.get_text_features(input_ids=input_ids)
+    return image_outputs, text_outputs
 
   def training_step(self, batch, batch_idx):
-    pixel_vals, input_ids, *_ = batch
-    y_image, y_text = self.forward(pixel_vals, input_ids)
-    loss = self.compute_ce_loss(y_image, y_text)
+    gold_labels, pixel_values, input_ids, _ = batch
+    pixel_values = einops.rearrange(pixel_values, 'bs cands c h w -> (bs cands) c h w') # .to(dtype=torch.float32, device=device)
+    y_images, y_text = self.forward(pixel_values, input_ids)
+    loss = self.compute_loss(y_images, y_text, gold_labels)
     self.log("training_loss", loss, on_epoch=True, on_step=False, prog_bar=True)
-    wandb.log({"batch_training_loss": loss})
     return loss
 
-  def compute_ce_loss(self, y_image, y_text):
-    co_sim = cos_sim(y_image, y_text.T)
-    eye = torch.eye(y_image.size(0), device=device)
-    # loss = torch.norm(co_sim - eye)
-    loss = F.cross_entropy(co_sim, eye)
-    return loss
+  # def compute_ce_loss(self, y_image, y_text):
+  #   co_sim = cos_sim(y_image, y_text.T)
+  #   eye = torch.eye(y_image.size(0), device=device)
+  #   # loss = torch.norm(co_sim - eye)
+  #   loss = F.cross_entropy(co_sim, eye)
+  #   return loss
 
-  def compute_contrastive_loss(self, y_image, y_text, labels):
-    margin = y_image.size(-1)
-    dist = (y_image - y_text).norm(dim=-1, p=2)
-    loss = labels * dist.pow(2) + (1 - labels) * torch.max(margin - dist, 0).pow(2)
+  # def compute_contrastive_loss(self, y_image, y_text, labels):
+  #   margin = y_image.size(-1)
+  #   dist = (y_image - y_text).norm(dim=-1, p=2)
+  #   loss = labels * dist.pow(2) + (1 - labels) * torch.max(margin - dist, 0).pow(2)
+  #   return loss
+  
+  '''
+    y_images -> (batch_size x INST_SIZ) x 512
+    y_text -> batch_size x 512
+  '''
+  def compute_loss(self, y_images, y_text, gold_labels):
+    # similarity -> (batch_size x INST_SIZ) x batch_size
+    similarity = dot_prod_sim(y_images, y_text.T).T
+    ideal = torch.zeros_like(similarity)
+    batch_siz = y_text.size(0)
+
+    # TODO: is there an 'elegant' way to do this?
+    for idx in range(batch_siz):
+      label = gold_labels[idx]
+      ideal[(idx * INST_SIZ) + label, idx] = 1.
+
+    loss = F.cross_entropy(similarity, ideal)
     return loss
   
   def validation_step(self, batch, batch_idx):
-    pixel_vals, input_ids, idxs, labels = batch
-    batch_siz = len(idxs)
-    candidate_paths = self.candidate_paths[idxs.cpu()]
-    y_image, y_text = self.forward(pixel_vals, input_ids)
-    loss = self.compute_ce_loss(y_image, y_text)
+    gold_labels, pixel_values, input_ids, *_ = batch
+    batch_siz = input_ids.size(0)
+    pixel_values = einops.rearrange(pixel_values, 'bs cands c h w -> (bs cands) c h w') # .to(device)
+    y_images, y_text = self.forward(pixel_values, input_ids)
+    y_images = y_images / y_images.norm(p=2, dim=-1, keepdim=True)
+    y_text = y_text / y_text.norm(p=2, dim=-1, keepdim=True)
+    loss = self.compute_loss(y_images, y_text, gold_labels)
     self.val_loss = np.append(self.val_loss, loss.mean().cpu())
     self.log("val_loss", loss, on_epoch=True, on_step=False, prog_bar=True)
-    
-    candidate_features = []
-    for image_paths in candidate_paths:
-      assert len(image_paths) == INST_SIZ
-      names = '_'.join([os.path.basename(p) for p in image_paths])
-      if names not in IMAGE_MAP:
-        self.made_update = True
-        images = []
-        for p in image_paths:
-          images.append(Image.open(p))
-        inputs = processor(images=images, return_tensors='pt').to(device)
-        IMAGE_MAP[names] = model.get_image_features(**inputs)
-      candidate_features.append(IMAGE_MAP[names])
-
-    candidate_features = torch.cat(candidate_features, dim=0).to(device)
 
     choices = []
     acc, mrr = 0, 0
-    for i in range(batch_siz):
-      sim_context_image = dot_prod_sim(y_text[i], candidate_features[i*INST_SIZ:(i+1)*INST_SIZ].T)
+    for idx in range(batch_siz):
+      sim_context_image = dot_prod_sim(y_text[idx], y_images[idx * INST_SIZ:(idx + 1) * INST_SIZ].T)
       rankings = sim_context_image.argsort(descending=True)
-      label = labels[i]
+      label = gold_labels[idx]
       choice = rankings[0]
       acc += int(choice == label)
       choices.append(choice)
@@ -194,28 +175,23 @@ class CLIPWrapper(LightningModule):
 
     self.log("val_accuracy", acc, on_epoch=True, on_step=False, prog_bar=True)
     self.log("val_mrr", mrr, on_epoch=True, on_step=False, prog_bar=True)
-    wandb.log({
-      "batch_validation_accuracy": acc, 
-      "batch_validation_loss": loss, 
-      "batch_validation_mrr": mrr,
-    })
 
   def configure_optimizers(self):
     optimizer = torch.optim.Adam(self.parameters(), lr=args.lr)
     return optimizer
 
   def on_validation_epoch_end(self):
-    wandb.log({
-      "epoch_validation_accuracy": self.val_acc.mean(), 
-      "epoch_validation_loss": self.val_loss.mean(), 
-      "epoch_validation_mrr": self.val_mrr.mean(),
-    })
-    if self.made_update:
-      torch.save(IMAGE_MAP, self.persist)
-      self.made_update = False
     self.val_acc, self.val_loss, self.val_mrr = [np.array([])] * 3
 
-dataset = VWSDDatasetJIT(focus_words, contexts, gold_data, candidate_data, max_tokens=40)
+def load_instance(instance_candidates):
+  joined_names = '_'.join([p for p in instance_candidates])
+  instance_images = [Image.open(os.path.join(args.image_dir, f)) for f in instance_candidates]
+  return joined_names, custom_processor(images=instance_images)
+
+loader = ParallelLoader(candidate_data, load_instance)
+loader.load() and loader.save()
+
+dataset = VWSDDatasetJIT(focus_words, contexts, gold_data, candidate_data, loader=loader, max_tokens=40)
 len_d = len(dataset)
 train_split = 1 - args.val_split
 
@@ -224,20 +200,20 @@ if sum(splits) < len_d:
   splits[0] += 1
 elif sum(splits) > len_d:
   splits[0] += 1
+# splits = [10, 5]
+# splits.append(len(dataset) - sum(splits))
 
-train_set, val_set = random_split(dataset, splits)
+train_set, val_set, *_ = random_split(dataset, splits)
 train_sampler = None
-train_loader = DataLoader(train_set, batch_size=args.bs, shuffle=True, sampler=train_sampler, num_workers=5)
-val_loader = DataLoader(val_set, batch_size=args.bs, shuffle=not True, num_workers=5)
-
-candidate_paths = np.array([[os.path.join(args.image_dir, f) for f in image_group] for image_group in candidate_data])
+train_loader = DataLoader(train_set, batch_size=args.bs, shuffle=True, sampler=train_sampler, num_workers=0)
+val_loader = DataLoader(val_set, batch_size=args.bs, shuffle=not True, num_workers=0)
 
 proj_name = 'V-WSD'
 run = wandb.init(project=proj_name)
 run.name = name
 wandb_logger = WandbLogger(project=proj_name)
 
-model_wrapper = CLIPWrapper(model, candidate_paths=candidate_paths, val_siz=len(val_loader))
+model_wrapper = CLIPWrapper(model, candidate_data, val_siz=len(val_loader))
 checkpoint_cb = ModelCheckpoint(save_top_k=2, monitor="val_accuracy", verbose=True)
 early_stopping_cb = EarlyStopping(monitor="val_accuracy", mode="max", patience=3, verbose=True)
 trainer = Trainer(
@@ -247,7 +223,7 @@ trainer = Trainer(
   max_epochs=args.epochs, 
   check_val_every_n_epoch=1, 
   callbacks=[checkpoint_cb, early_stopping_cb],
-  accumulate_grad_batches=int(round(128 / args.bs))
+  accumulate_grad_batches=int(round(64 / args.bs))
 )
 
 trainer.validate(model_wrapper, val_loader)
