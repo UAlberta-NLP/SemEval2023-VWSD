@@ -94,14 +94,16 @@ def raganato_evaluate(
             prob_output = {}
             prob_output["id"] = sample.sample_id
             prob_output["probs"] = {}
+            prob_output["logits"] = {}
 
-            for candidate_idx, candidate_prob in enumerate(
-                sample.kwargs["probs"]
+            for candidate_idx, (candidate_prob, candidate_logit) in enumerate(
+                zip(sample.kwargs["probs"], sample.kwargs["logits"])
             ):
                 candidate_sense = sample_prediction2sense(
                     sample, candidate_idx, wordnet_sense_inventory
                 )
                 prob_output["probs"][candidate_sense] = candidate_prob
+                prob_output["logits"][candidate_sense] = candidate_logit
             f.write(f"{json.dumps(prob_output)}\n")
 
     # compute metrics
