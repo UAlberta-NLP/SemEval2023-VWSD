@@ -6,6 +6,12 @@ from xml.dom import minidom
 from src.utils.commons import execute_bash_command
 
 pos_map = {
+    # SELF
+    "v": "v",  # VERB
+    "n": "n",  # NOUN
+    "a": "a",  # ADJ
+    "r": "r",  # ADV
+    "s": "a",  # ADJ_SAT
     # U-POS
     "NOUN": "n",
     "VERB": "v",
