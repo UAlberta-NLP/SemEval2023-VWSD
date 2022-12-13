@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup, Tag
 
 @dataclass
 class WSDToken:
+    text: str
     lemma: str
     pos: str
     id: Optional[str]
@@ -13,7 +14,7 @@ class WSDToken:
     @staticmethod
     def from_xml_tag(tag: Tag) -> "WSDToken":
         token = WSDToken(
-            lemma=tag["lemma"], pos=tag["pos"], id=tag.get("id", None)
+            text=tag.text, lemma=tag["lemma"], pos=tag["pos"], id=tag.get("id", None)
         )
 
         return token
@@ -49,7 +50,7 @@ class WSDDataset:
             for sentence_tag in soup.find_all("sentence"):
                 yield WSDSentence.from_xml_tag(sentence_tag)
 
-        return WSDDataset(instances=_generate_instances)
+        return WSDDataset(instances=_generate_instances())
 
     def __iter__(self) -> Iterator[WSDSentence]:
         yield from self.instances
