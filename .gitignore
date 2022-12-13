@@ -16,3 +16,14 @@ gen_data
 dot.sh
 .vscode
 se23-consec-train-output
+semeval-2023-task-1-V-WSD-train-v1
+*.out
+*logs
+__MACOSX
+openai_clip-vit-base-patch32.pt
+data
+esc
+.cache
+jobs
+V-WSD
+wandb

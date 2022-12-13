@@ -1,20 +1,34 @@
+# nohup python text_image_baseline.py -d semeval-2023-task-1-V-WSD-train-v1/train_v1/train.data.v1.txt  -g semeval-2023-task-1-V-WSD-train-v1/train_v1/train.gold.v1.txt  -i  semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ &
+# nohup python text_image_baseline.py -d semeval-2023-task-1-V-WSD-train-v1/train_v1/train.data.v1.txt -g semeval-2023-task-1-V-WSD-train-v1/train_v1/train.gold.v1.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-large-patch14 > 14.out &
+
 import argparse
 import glob
 import os
-from PIL import Image
+from time import time
 from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer
 import termcolor
 import torch
+from tqdm import tqdm
+from PIL import ImageFile, Image
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+Image.MAX_IMAGE_PIXELS = 1000000000
+
 import sys
 sys.path.append('.')
 from utils import cos_sim
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data', default='data/trial.data.txt')
-parser.add_argument('--gold', default='data/trial.gold.txt')
-parser.add_argument('--image-dir', default='data/all_images')
-parser.add_argument('--model', default='openai/clip-vit-base-patch32')
+parser.add_argument('--data', '-d', default='data/trial.data.txt')
+parser.add_argument('--gold', '-g', default='data/trial.gold.txt')
+parser.add_argument('--image-dir', '-i', default='data/all_images')
+parser.add_argument('--model', '-m', default='openai/clip-vit-base-patch32')
+parser.add_argument('--instance_batch_size', '-ibs', default=10, type=int, help='This does not follow the conventional meaning of batch size. Kindly take note.')
+parser.add_argument('--output', '-o', default=None)
 args = parser.parse_args()
+
+if args.output is None:
+  args.output = f"{args.model.replace('/', '_')}_log.out"
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -23,77 +37,56 @@ processor = CLIPProcessor.from_pretrained(args.model)
 tokenizer = CLIPTokenizer.from_pretrained(args.model)
 
 data = [l.strip().split('\t') for l in open(args.data).readlines()]
-gold = [l.strip() for l in open(args.gold).readlines()]
+gold_data = [l.strip() for l in open(args.gold).readlines()]
+assert len(data) == len(gold_data)
 all_images_paths = glob.glob(os.path.join(args.image_dir, '*'))
 correct, total = 0, 0
 
-# for instance, gold in zip(data, gold):
-#   word, context, *image_paths = instance
-#   images = [Image.open(os.path.join(args.image_dir, i)) for i in image_paths]
-  
-#   text_inputs = tokenizer(text=[context], padding=True, return_tensors="pt").to(device)
-#   text_embeddings = model.get(**text_inputs).T
-  
-#   image_inputs = processor(images=images, return_tensors="pt", padding=True).to(device)
-  
-#   image_embeddings = model.get_image_features(**image_inputs)
-  
-#   cosine_similarity = cos_sim(image_embeddings, text_embeddings)
-  
-#   best = image_paths[cosine_similarity.argmax()]
-  
-#   total += 1
-#   correct += 1 if best == gold else 0
-#   color = termcolor.colored('right', 'green') if best == gold else termcolor.colored('wrong', 'red')
-  
-#   print(word, best, gold, '->', color)
-#   print(text_inputs, text_embeddings.shape)
-#   print(model.get_text_features(**text_inputs, return_dict=True, output_hidden_states=True))
-#   break
+out = open(args.output, 'w')
+ibs = args.instance_batch_size
+i = 0
+j = i + ibs
+inst_size = 10 # TODO: softcode
+for i in tqdm(range(0, len(data), ibs), 'Processing images and text...'):
+  if i >= len(data):
+    break
 
-# for instance, gold in zip(data, gold):
-#   word, context, *image_paths = instance
-#   images = [Image.open(os.path.join(args.image_dir, i)) for i in image_paths]
-#   inputs = processor(text=[context], images=images, return_tensors="pt", padding=True).to(device)
-#   outputs = model(**inputs)
-#   logits_per_image = outputs.logits_per_image
-#   probs = logits_per_image.softmax(dim=0)
-#   best = image_paths[probs.argmax()]
-#   total += 1
-#   correct += 1 if best == gold else 0
-#   color = termcolor.colored('right', 'green') if best == gold else termcolor.colored('wrong', 'red')
-#   print(word, best, gold, '->', color)
-#   print(outputs.text_model_output.last_hidden_state.shape,  outputs.text_model_output.pooler_output.shape)
-#   break
+  instance = data[i:j]
+  gold = gold_data[i:j]
 
-for instance, gold in zip(data, gold):
-  word, context, *image_paths = instance
-  images = [Image.open(os.path.join(args.image_dir, i)) for i in image_paths]
-  inputs = processor(text=[context], images=images, return_tensors="pt", padding=True).to(device)
+  words, contexts, image_pathss = [], [], []
+  for inst in instance:
+    word, context, *image_paths = inst
+    words.append(word)
+    contexts.append(context)
+    image_pathss.extend(image_paths)
+
+  # print(words, contexts, image_pathss)
+  images = [Image.open(os.path.join(args.image_dir, i)) for i in image_pathss]
+  inputs = processor(text=contexts, images=images, return_tensors="pt", padding=True).to(device)
   outputs = model(**inputs)
-  # logits_per_image = outputs.logits_per_image
-  # probs = logits_per_image.softmax(dim=0)
-  # img_e = outputs.vision_model_output.pooler_output
-  # txt_e = outputs.text_model_output.pooler_output.T
-  img_e = outputs.image_embeds
-  # get hidden states for tokens from the second to the second to the last
-  ctx_x = model.text_projection(outputs.text_model_output[0][:, 1:-1, :]).mean(dim=1)
-  # get hidden states for the last token
-  cls_x = model.text_projection(outputs.text_model_output[0][:, -1:, :]).squeeze(dim=1)
-  # print(ctx_x.shape, cls_x.shape)
-  # take a weighted average of states
-  x = torch.cat((ctx_x * 0.75, cls_x * 0.25), dim=0).sum(dim=0)
-  # y = torch.cat((ctx_x, cls_x), dim=0).mean(dim=0)
-  # print(x == y)
-  # print(x_comb.shape)
-  txt_e = (x / x.norm(p=2, dim=-1, keepdim=True)).T
-  sim = cos_sim(img_e, txt_e)
-  best = image_paths[sim.argmax()]
-  total += 1
-  correct += 1 if best == gold else 0
-  color = termcolor.colored('right', 'green') if best == gold else termcolor.colored('wrong', 'red')
-  print(word, best, gold, '->', color)
-  # print(outputs.text_model_output.last_hidden_state.shape,  outputs.text_model_output.pooler_output.shape)
-  # break
+  
+  for k in range(len(instance)):
+    img_e = outputs.image_embeds[k*inst_size:(k+1)*inst_size]
+    txt_e = outputs.text_embeds[k:k+1]
+    txt_e = (txt_e / txt_e.norm(p=2, dim=-1, keepdim=True)).T
 
-print(f'\nAccuracy: {correct / total}')
+    sim = cos_sim(img_e, txt_e)
+    word = words[k]
+    image_paths = image_pathss[k*inst_size:(k+1)*inst_size]
+    g_k = gold[k]
+    best = image_paths[sim.argmax()]
+    total += 1
+    is_correct = int(best == g_k)
+    correct += 1 if is_correct else 0
+    color = termcolor.colored('right', 'green') if is_correct else termcolor.colored('wrong', 'red')
+    out.write(f'{word} {best} {g_k} {image_paths} -> {"right" if is_correct else "wrong"}\n')
+  
+  out.flush()
+  i += ibs
+  j += ibs
+
+msg = f'\nAccuracy: {correct / total}'
+out.write(msg)
+print(msg)
+out.close()

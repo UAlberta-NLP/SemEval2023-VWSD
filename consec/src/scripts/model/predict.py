@@ -56,20 +56,11 @@ def predict(
             with torch.no_grad():
                 batch_out = module(**{k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()})
                 batch_predictions = batch_out["pred_probs"]
-                # Talgat: added batch_logits
-                batch_logits = batch_out["pred_logits"]
 
-        # Talgat: added batch_logits
-        for sample, dp, probs, logits in zip(batch_samples, batch_definitions_positions, batch_predictions, batch_logits):
+        for sample, dp, probs in zip(batch_samples, batch_definitions_positions, batch_predictions):
             definition_probs = []
-
-            # Talgat: added definition logits
-            definition_logits = []
-
             for start in dp:
                 definition_probs.append(probs[start].item())
-                definition_logits.append(logits[start].item())
-            sample.kwargs["logits"] = definition_logits
             yield sample, definition_probs
             if progress_bar is not None:
                 progress_bar.update()

@@ -1,8 +1,19 @@
-"""
-  In this experiment, generate captions from a template and a definition for classes from various image dataset
-  CIFAR-10, CIFAR-100, MNIST, Fashion MNIST, and ImageNet
-"""
+# Start docker service
+# docker run -d --name babelnet -v /local/storage/babelnet5/BabelNet-5.0/ -p 7780:8000 -p 7790:1234 babelscape/babelnet-rpc:latest
 
+# Run java pre-program
+# sh run-bgwi.sh /home/ogezi/ideas/v-wsd/data/trial.data.txt /home/ogezi/ideas/v-wsd/data/images.json
+
+import argparse
+from functools import partial
+from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer
+import torch
+import glob
+import os
+import json
+from PIL import Image
+from utils import cos_sim
+import termcolor
 from copy import deepcopy
 import jax
 import jax.numpy as jnp
@@ -26,46 +37,37 @@ from dalle_mini import DalleBartProcessor
 from flax.training.common_utils import shard_prng_key
 from time import time
 import numpy as np
-from PIL import Image
 import os
 from nltk.corpus import wordnet as wn
 import argparse
 import json
-from functools import partial
 
 import argparse, os, sys, glob
 import torch
 import numpy as np
 from omegaconf import OmegaConf
-from PIL import Image
-from tqdm import tqdm, trange
-from einops import rearrange
-from torchvision.utils import make_grid
-from torchvision.datasets import CIFAR10, CIFAR100, MNIST, FashionMNIST, ImageNet
-from numba import cuda
 
 import argparse
 import glob
 import os
-from PIL import Image
-from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer
-import termcolor
-import torch
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--data', default='data/trial.data.txt')
 parser.add_argument('--gold', default='data/trial.gold.txt')
+parser.add_argument('--bn-image-meta', default='data/bn_images.json')
 parser.add_argument('--image-dir', default='data/all_images')
+parser.add_argument('--bn-image-dir', default='data/bn_images')
 parser.add_argument('--model', default='openai/clip-vit-base-patch32')
 parser.add_argument('--n_gens', default=1, type=int)
 args = parser.parse_args()
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-clip_model = CLIPModel.from_pretrained(args.model) # .to(device)
+clip_model = CLIPModel.from_pretrained(args.model).to(device)
 clip_processor = CLIPProcessor.from_pretrained(args.model)
 clip_tokenizer = CLIPTokenizer.from_pretrained(args.model)
 
+meta = json.load(open(args.bn_image_meta))
 data = [l.strip().split('\t') for l in open(args.data).readlines()]
 gold = [l.strip() for l in open(args.gold).readlines()]
 all_images_paths = glob.glob(os.path.join(args.image_dir, '*'))
@@ -167,26 +169,73 @@ for i in range(n_generations):
 
 s_images = [[] for i in range(len(data))]
 for i, (gen_imgs, context) in enumerate(zip(n_images, prompts)):
-  inputs = clip_processor(text=[context], images=gen_imgs, return_tensors="pt", padding=True) # .to(device)
+  inputs = clip_processor(text=[context], images=gen_imgs, return_tensors="pt", padding=True).to(device)
   outputs = clip_model(**inputs)
   logits_per_image = outputs.logits_per_image
   probs = logits_per_image.softmax(dim=0)
   best = gen_imgs[probs.argmax()]
   s_images[i].append(best)
 
-correct, total = 0, 0
-for instance, gold_inst, gen_img in zip(data, gold, s_images):
-  word, context, *image_paths = instance
-  gold_images = [Image.open(os.path.join(args.image_dir, i)) for i in image_paths]
-  inputs = clip_processor(text=[f'A photo of {context}'], images=gold_images + gen_img, return_tensors="pt", padding=True) # .to(device)
-  outputs = clip_model(**inputs)
-  img_e = outputs.image_embeds[:len(gold_images), :]
-  gen_img_e = outputs.image_embeds[len(gold_images):, :].mean(dim=0).unsqueeze(dim=0)
-  sim = cos_sim(img_e, gen_img_e.T)
-  best = image_paths[sim.argmax()]
-  total += 1
-  correct += 1 if best == gold_inst else 0
-  color = termcolor.colored('right', 'green') if best == gold_inst else termcolor.colored('wrong', 'red')
-  print(word, best, gold_inst, '->', color)
+bn_latents = {}
+bn_maps = {}
+eps = 1e-9
+w = 'swing'
+with torch.no_grad():
+  for word, senses in meta.items():
+    cnt = 0
+    # if word != w:
+    #   continue
+    if word not in bn_latents:
+      bn_latents[word] = {}
+      bn_maps[word] = []
+    for sense in senses:
+      id = sense['id']
+      # print(word, id)
+      target_files = glob.glob(os.path.join(args.bn_image_dir, word, id, '*'))
+      for t in target_files:
+        bn_maps[word].append(t)
+        # print(cnt, t)
+        cnt += 1
+      if len(target_files) == 0:
+        # bn_latents[word][id] = torch.zeros((1, 512), device=device) + eps
+        continue
+      images = [Image.open(i) for i in target_files]
+      image_inputs = clip_processor(images=images, return_tensors="pt", padding=True).to(device)
+      image_outputs = clip_model.get_image_features(**image_inputs)
+      bn_latents[word][id] = image_outputs
 
-print(f'\n{n_generations} Accuracy: {correct / total}')
+correct, total = 0, 0
+thresh = 1. - (1e-6)
+data = [l.strip().split('\t') for l in open(args.data).readlines()]
+gold = [l.strip() for l in open(args.gold).readlines()]
+with torch.no_grad():
+  for instance, gold, gen_img in zip(data, gold, s_images):
+    word, context, *image_paths = instance
+    # if word != w:
+    #   continue
+    all_word_latents = torch.cat([i.to(device) for i in bn_latents[word].values()], dim=0)
+    images = [Image.open(os.path.join(args.image_dir, i)) for i in image_paths]
+    image_inputs = clip_processor(images=images, return_tensors="pt", padding=True).to(device)
+    image_outputs = clip_model.get_image_features(**image_inputs)
+    latents = all_word_latents.T
+    sim_matrix = cos_sim(image_outputs, latents)
+    acceptable = torch.where(sim_matrix >= thresh, 1, 0)
+    acceptable_candidate_idx = torch.max(acceptable, dim=0).values
+    acceptable_candidate_paths = [i for idx, i in enumerate(image_paths) if acceptable_candidate_idx[idx] == 1.]
+    print(word, acceptable_candidate_paths, acceptable_candidate_idx)
+    if len(acceptable_candidate_paths) > 0:
+      images = [Image.open(os.path.join(args.image_dir, i)) for i in acceptable_candidate_paths]
+      image_inputs = clip_processor(images=images, return_tensors="pt", padding=True).to(device)
+      image_outputs = clip_model.get_image_features(**image_inputs)
+    else:
+      acceptable_candidate_paths = image_paths
+    gen_inputs = clip_processor(images=gen_img, padding=True, return_tensors="pt").to(device)
+    gen_img_e = clip_model.get_image_features(**gen_inputs).T
+    sim = cos_sim(image_outputs, gen_img_e)
+    best = acceptable_candidate_paths[sim.argmax()]
+    total += 1
+    correct += 1 if best == gold else 0
+    color = termcolor.colored('right', 'green') if best == gold else termcolor.colored('wrong', 'red')
+    print(word, best, gold, '->', color)
+
+print(f'\nAccuracy: {correct / total}')

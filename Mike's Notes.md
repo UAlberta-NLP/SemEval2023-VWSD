@@ -59,3 +59,16 @@ Doing `n_images = [[]] * len(data)` cause multiple copies of the **same** array 
 7 Accuracy: 0.5625
 8 Accuracy: 0.6875
 9 Accuracy: 0.625
+
+Text-only WSD
+-------------
+- Talgat used consec to disambiguate the words in context
+- Ning did the same by hand
+- Michael did the same by hand
+
+### I used the scorer from Raganato et al, 2017 to measure aggreement between ConSec, Ning and Michael (P = R = F1)
+- ConSec and Ning: 43.8%
+- ConSec and Michael: 56.3%
+- Ning and Michael: 56.3%
+
+These scores imply that these words are highly amibiguous

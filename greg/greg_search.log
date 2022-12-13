@@ -1,0 +1,8 @@
+-w_ic 1 -w_cg 0 -w_ig 0 -pf max: 0.722
+-w_ic 1 -w_cg 0 -w_ig 1 -pf max: 0.792
+-w_ic 0 -w_cg 1 -w_ig 0 -pf max: 0.11
+-w_ic 0 -w_cg 0 -w_ig 0 -pf max: 0.11
+-w_ic 0 -w_cg 0 -w_ig 1 -pf max: 0.686
+-w_ic 1 -w_cg 1 -w_ig 0 -pf max: 0.722
+-w_ic 0 -w_cg 1 -w_ig 1 -pf max: 0.684
+-w_ic 1 -w_cg 1 -w_ig 1 -pf max: 0.792

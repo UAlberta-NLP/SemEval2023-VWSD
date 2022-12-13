@@ -4,18 +4,17 @@ import heapq
 import os
 import statistics
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Tuple, List, Dict, Set, Optional
 
 import networkx as nx
 import torch
+
 from src.consec_dataset import ConsecSample
 from src.dependency_finder import DependencyFinder
 from src.scripts.model.predict import predict
 
 
-def build_digraph_from_dependencies(
-    wsd_instances_dependencies: Dict[str, List[str]]
-) -> nx.DiGraph:
+def build_digraph_from_dependencies(wsd_instances_dependencies: Dict[str, List[str]]) -> nx.DiGraph:
     digraph = nx.DiGraph()
     for s, ts in wsd_instances_dependencies.items():
         digraph.add_node(s)
@@ -34,9 +33,7 @@ def contains_cycles(wsd_instances_dependencies: Dict[str, List[str]]) -> bool:
         return False
 
 
-def report_predictions(
-    output_file, predicted_consec_samples: List[Tuple[ConsecSample, int]]
-):
+def report_predictions(output_file, predicted_consec_samples: List[Tuple[ConsecSample, int]]):
     with open(output_file, "w") as f:
         for sample, prediction in predicted_consec_samples:
             if "unannotated" in sample.sample_id:
@@ -71,10 +68,7 @@ class Predictor:
             **kwargs,
         )
         if reporting_folder is not None:
-            report_predictions(
-                f"{reporting_folder}/predictions.report",
-                predicted_consec_samples,
-            )
+            report_predictions(f"{reporting_folder}/predictions.report", predicted_consec_samples)
         return predicted_consec_samples
 
     def _predict(
@@ -121,8 +115,7 @@ class TeacherForcedPredictor(Predictor):
                 continue
             instance_id2sample[instance_id] = sample
             sample_deps = self.dependency_finder.find_dependencies(
-                sample.kwargs["enlarged_disambiguation_context"],
-                sample.kwargs["enlarged_disambiguation_index"],
+                sample.kwargs["enlarged_disambiguation_context"], sample.kwargs["enlarged_disambiguation_index"]
             )
             dep_adj_l[instance_id] = [sd.instance_id for sd in sample_deps]
 
@@ -134,12 +127,7 @@ class TeacherForcedPredictor(Predictor):
             instance_id = sample.sample_id
             for _iid in dep_adj_l[instance_id]:
                 _s = instance_id2sample[_iid]
-                sample.context_definitions.append(
-                    (
-                        _s.gold_definitions[0],
-                        sample.get_sample_id_position(_iid),
-                    )
-                )
+                sample.context_definitions.append((_s.gold_definitions[0], sample.get_sample_id_position(_iid)))
 
         # predict
 
@@ -149,10 +137,7 @@ class TeacherForcedPredictor(Predictor):
             predictions[sample.sample_id] = torch.tensor(probs).argmax().item()
 
         # return
-        return [
-            (sample, predictions[sample.sample_id])
-            for sample in consec_samples
-        ]
+        return [(sample, predictions[sample.sample_id]) for sample in consec_samples]
 
 
 class GreedyDepPredictor(Predictor):
@@ -190,8 +175,7 @@ class GreedyDepPredictor(Predictor):
                 continue
 
             sample_deps = self.dependency_finder.find_dependencies(
-                sample.kwargs["enlarged_disambiguation_context"],
-                sample.kwargs["enlarged_disambiguation_index"],
+                sample.kwargs["enlarged_disambiguation_context"], sample.kwargs["enlarged_disambiguation_index"]
             )
             dep_adj_l[instance_id] = [sd.instance_id for sd in sample_deps]
 
@@ -218,9 +202,7 @@ class GreedyDepPredictor(Predictor):
             for instance_id, sample in instance_id2sample.items():
 
                 # check if sample can be done
-                if instance_id in done or any(
-                    _iid not in done for _iid in depends_on[instance_id]
-                ):
+                if instance_id in done or any(_iid not in done for _iid in depends_on[instance_id]):
                     continue
 
                 # populate context definitions
@@ -229,31 +211,23 @@ class GreedyDepPredictor(Predictor):
                     _s = instance_id2sample[_iid]
                     _p = predictions[_iid]
                     sample.context_definitions.append(
-                        (
-                            _s.candidate_definitions[_p],
-                            sample.in_context_sample_id2position[_iid],
-                        )
+                        (_s.candidate_definitions[_p], sample.in_context_sample_id2position[_iid])
                     )
 
+                # add to round samples
                 round_samples.append(sample)
 
             # predict
 
             print(f"Round samples: {len(round_samples)}")
             for sample, probs in predict(samples=round_samples, **kwargs):
-                predictions[sample.sample_id] = (
-                    torch.tensor(probs).argmax().item()
-                )
-                sample.kwargs["probs"] = probs
+                predictions[sample.sample_id] = torch.tensor(probs).argmax().item()
 
             # update done
             done.update([sample.sample_id for sample in round_samples])
 
         # return
-        return [
-            (sample, predictions[sample.sample_id])
-            for sample in consec_samples
-        ]
+        return [(sample, predictions[sample.sample_id]) for sample in consec_samples]
 
 
 @dataclass
@@ -273,12 +247,7 @@ class _Beam:
 
 
 class BeamDepPredictor(Predictor):
-    def __init__(
-        self,
-        dependency_finder: DependencyFinder,
-        beam_size: int,
-        enable_reporting: bool = False,
-    ):
+    def __init__(self, dependency_finder: DependencyFinder, beam_size: int, enable_reporting: bool = False):
         self.dependency_finder = dependency_finder
         self.beam_size = beam_size
         self.enable_reporting = enable_reporting
@@ -308,8 +277,7 @@ class BeamDepPredictor(Predictor):
             instance_id = sample.sample_id
             if instance_id is not None:
                 sample_deps = self.dependency_finder.find_dependencies(
-                    sample.kwargs["enlarged_disambiguation_context"],
-                    sample.kwargs["enlarged_disambiguation_index"],
+                    sample.kwargs["enlarged_disambiguation_context"], sample.kwargs["enlarged_disambiguation_index"]
                 )
                 dep_adj_l[instance_id] = [sd.instance_id for sd in sample_deps]
 
@@ -328,18 +296,13 @@ class BeamDepPredictor(Predictor):
             # compute beam path
             beam_path = self.compute_beam_path(cc, depends_on)
             # add beam
-            beams.append(
-                _Beam(sub_beams=[([], 0.0)], beam_path=beam_path, position=0)
-            )
+            beams.append(_Beam(sub_beams=[([], 0.0)], beam_path=beam_path, position=0))
 
         # if reporting is enabled, create a reporting file for each beam
         beam_id2reporting_file = None
         if self.enable_reporting:
             os.mkdir(f"{reporting_folder}/beams")
-            beam_id2reporting_file = {
-                i: open(f"{reporting_folder}/beams/{i}", "w")
-                for i, _ in enumerate(beams)
-            }
+            beam_id2reporting_file = {i: open(f"{reporting_folder}/beams/{i}", "w") for i, _ in enumerate(beams)}
 
         # do beam
 
@@ -359,18 +322,12 @@ class BeamDepPredictor(Predictor):
                     sample = copy.deepcopy(instance_id2sample[instance_id])
                     sample.kwargs["beam-search"] = i, j
                     round_samples.append(sample)
-                    _iid2_p_idx = {
-                        _iid: _p_idx
-                        for _iid, _p_idx in zip(beam.beam_path, sub_beam)
-                    }
+                    _iid2_p_idx = {_iid: _p_idx for _iid, _p_idx in zip(beam.beam_path, sub_beam)}
                     for _iid in depends_on[instance_id]:
                         _s = instance_id2sample[_iid]
                         _p_idx = _iid2_p_idx[_iid]
                         sample.context_definitions.append(
-                            (
-                                _s.candidate_definitions[_p_idx],
-                                sample.get_sample_id_position(_iid),
-                            )
+                            (_s.candidate_definitions[_p_idx], sample.get_sample_id_position(_iid))
                         )
 
             # predict and group beams
@@ -397,18 +354,11 @@ class BeamDepPredictor(Predictor):
                     log_probs = torch.tensor(probs).log()
                     predicted_idxs = log_probs.argsort(descending=True)
                     for idx in predicted_idxs:
-                        sub_beams.append(
-                            (
-                                history + [idx.item()],
-                                history_score + log_probs[idx].item(),
-                            )
-                        )
+                        sub_beams.append((history + [idx.item()], history_score + log_probs[idx].item()))
 
                 # extract best beams
                 best_sub_beams_idx = heapq.nlargest(
-                    self.beam_size,
-                    range(len(sub_beams)),
-                    key=lambda x: sub_beams[x][1],
+                    self.beam_size, range(len(sub_beams)), key=lambda x: sub_beams[x][1]
                 )
                 # best_sub_beams = heapq.nlargest(self.beam_size, sub_beams, key=lambda x: x[1])
 
@@ -417,22 +367,13 @@ class BeamDepPredictor(Predictor):
                     rf = beam_id2reporting_file[beam_id]
                     rf.write(f"# beam path:\n")
                     for n in beam.beam_path:
-                        rf.write(
-                            f' {">" if n == sample.sample_id else " "}{n}\n'
-                        )
+                        rf.write(f' {">" if n == sample.sample_id else " "}{n}\n')
                     rf.write(f"# beams\n")
                     for i, (history, history_score) in enumerate(sub_beams):
-                        rf.write(
-                            f' {">" if i in best_sub_beams_idx else " "}{history_score:.4f}\n'
-                        )
+                        rf.write(f' {">" if i in best_sub_beams_idx else " "}{history_score:.4f}\n')
                         for _iid, _p_idx in zip(beam.beam_path, history):
                             _s = instance_id2sample[_iid]
-                            gold_marker = (
-                                "!"
-                                if _s.candidate_definitions[_p_idx]
-                                in _s.gold_definitions
-                                else " "
-                            )
+                            gold_marker = "!" if _s.candidate_definitions[_p_idx] in _s.gold_definitions else " "
                             rf.write(
                                 f"  {gold_marker} * {_s.candidate_definitions[_p_idx].linker} \t {_s.candidate_definitions[_p_idx].text}\n"
                             )
@@ -459,20 +400,13 @@ class BeamDepPredictor(Predictor):
                 v.close()
 
         # return
-        return [
-            (sample, predictions[sample.sample_id])
-            for sample in consec_samples
-        ]
+        return [(sample, predictions[sample.sample_id]) for sample in consec_samples]
 
-    def compute_beam_path(
-        self, connected_component: Set[str], depends_on: Dict[str, List[str]]
-    ) -> List[str]:
+    def compute_beam_path(self, connected_component: Set[str], depends_on: Dict[str, List[str]]) -> List[str]:
         beam_path, added = [], set()
         while len(beam_path) != len(connected_component):
             for instance_id in connected_component:
-                if instance_id in added or any(
-                    _iid not in added for _iid in depends_on[instance_id]
-                ):
+                if instance_id in added or any(_iid not in added for _iid in depends_on[instance_id]):
                     continue
                 beam_path.append(instance_id)
                 added.add(instance_id)
@@ -480,9 +414,7 @@ class BeamDepPredictor(Predictor):
 
 
 class BalancingPredictor(Predictor):
-    def __init__(
-        self, dependency_finder: DependencyFinder, predictor: Predictor
-    ):
+    def __init__(self, dependency_finder: DependencyFinder, predictor: Predictor):
         self.dependency_finder = dependency_finder
         self.predictor = predictor
 
@@ -495,9 +427,7 @@ class BalancingPredictor(Predictor):
     ) -> List[Tuple[ConsecSample, int]]:
 
         # base predictor predictions indexing
-        predicted_consec_samples = self.predictor.predict(
-            consec_samples, **kwargs
-        )
+        predicted_consec_samples = self.predictor.predict(consec_samples, **kwargs)
         predictions = {cs.sample_id: pi for cs, pi in predicted_consec_samples}
 
         # reset deps if they were set and compute instance_id2sample mapping
@@ -523,8 +453,7 @@ class BalancingPredictor(Predictor):
                 continue
 
             sample_deps = self.dependency_finder.find_dependencies(
-                sample.kwargs["enlarged_disambiguation_context"],
-                sample.kwargs["enlarged_disambiguation_index"],
+                sample.kwargs["enlarged_disambiguation_context"], sample.kwargs["enlarged_disambiguation_index"]
             )
             dep_adj_l[instance_id] = [sd.instance_id for sd in sample_deps]
 
@@ -543,19 +472,12 @@ class BalancingPredictor(Predictor):
                     _s = instance_id2sample[_iid]
                     _p = predictions[_iid]
                     sample.context_definitions.append(
-                        (
-                            _s.candidate_definitions[_p],
-                            sample.get_sample_id_position(_iid),
-                        )
+                        (_s.candidate_definitions[_p], sample.get_sample_id_position(_iid))
                     )
 
             print(f"Balancing round {round_count} starting")
-            for sample, probs in predict(
-                samples=list(instance_id2sample.values()), **kwargs
-            ):
-                round_predictions[sample.sample_id] = (
-                    torch.tensor(probs).argmax().item()
-                )
+            for sample, probs in predict(samples=list(instance_id2sample.values()), **kwargs):
+                round_predictions[sample.sample_id] = torch.tensor(probs).argmax().item()
 
             changed_instances = [
                 (iid, round_predictions[iid], predictions[iid])
@@ -574,7 +496,4 @@ class BalancingPredictor(Predictor):
             if round_count == 3:  # todo: remove
                 break
 
-        return [
-            (sample, predictions[sample.sample_id])
-            for sample in consec_samples
-        ]
+        return [(sample, predictions[sample.sample_id]) for sample in consec_samples]
