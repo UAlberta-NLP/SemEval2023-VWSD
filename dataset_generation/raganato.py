@@ -1,8 +1,16 @@
-from typing import Iterator, Optional, Union, List
+from typing import Iterator, Optional, Union, List, Dict
 from pathlib import Path
 from dataclasses import dataclass
 from bs4 import BeautifulSoup, Tag
 
+def read_raganato_labels(path: Union[str, Path]) -> Dict[str, str]:
+    labels = {}
+    with open(path, "r") as f:
+        for line in f:
+            instance_id, wn_key, *other = line.strip().split(" ")
+            labels[instance_id] = wn_key
+
+    return labels
 
 @dataclass
 class WSDToken:
@@ -36,6 +44,9 @@ class WSDSentence:
 
         return sentence
 
+    @property
+    def text(self) -> str:
+        return " ".join([t.text for t in self.tokens])
 
 class WSDDataset:
     def __init__(self, instances: Iterator[WSDSentence]) -> None:
