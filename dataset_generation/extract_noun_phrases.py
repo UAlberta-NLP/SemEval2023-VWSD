@@ -60,6 +60,7 @@ def main() -> None:
                             target_word,
                             context,
                             str(len(target_word.split(" ")) - 1),
+                            target_token.lemma,
                             sense_key,
                         ]
                     else:
@@ -72,6 +73,7 @@ def main() -> None:
                             target_word,
                             context,
                             str(idx),
+                            target_token.lemma,
                             sense_key,
                         ]
                     f.write("\t".join(data) + "\n")
