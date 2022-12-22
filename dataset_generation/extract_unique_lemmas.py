@@ -15,11 +15,11 @@ def main() -> None:
     with open(args.input_path, "r") as f:
         for line in f:
             *other, lemma, sense_key = line.strip().split("\t")
-            sense_keys.add((lemma, sense_key))
+            sense_keys.add(lemma.lower())
 
     with open(args.output_path, "w") as f:
-        for lemma, sense_key in sense_keys:
-            f.write(f"{lemma}\t{sense_key}\n")
+        for lemma in sense_keys:
+            f.write(f"{lemma}\n")
 
 
 if __name__ == "__main__":

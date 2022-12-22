@@ -44,6 +44,7 @@ def main() -> None:
                         or not (noun_chunk.start <= target_idx < noun_chunk.end)
                         or len(noun_chunk) >= 4
                         or sentence.tokens[target_idx].text.isupper()
+                        or "_" in sentence.tokens[target_idx].lemma
                     ):
                         continue
                     candidate = remove_stop_words(noun_chunk)
@@ -55,27 +56,18 @@ def main() -> None:
                     target_word = target_token.text.lower()
                     sense_key = sense_keys[target_token.id]
 
-                    if len(target_word.split(" ")) > 1:
-                        data = [
-                            target_word,
-                            context,
-                            str(len(target_word.split(" ")) - 1),
-                            target_token.lemma,
-                            sense_key,
-                        ]
-                    else:
-                        try:
-                            idx = candidate.index(target_word.lower())
-                        except ValueError:
-                            print(f"Could not find target index for {target_token.id} {target_word}")
-                            continue
-                        data = [
-                            target_word,
-                            context,
-                            str(idx),
-                            target_token.lemma,
-                            sense_key,
-                        ]
+                    try:
+                        idx = candidate.index(target_word.lower())
+                    except ValueError:
+                        print(f"Could not find target index for {target_token.id} {target_word}")
+                        continue
+                    data = [
+                        target_word,
+                        context.replace("_", " "),
+                        str(idx),
+                        target_token.lemma,
+                        sense_key,
+                    ]
                     f.write("\t".join(data) + "\n")
 
 
