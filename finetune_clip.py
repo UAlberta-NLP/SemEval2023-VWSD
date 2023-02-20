@@ -30,7 +30,7 @@ from torch import nn
 import torchmetrics
 from multiprocessing import cpu_count
 from pytorch_metric_learning import losses
-from utils import cos_sim, dot_prod_sim, custom_processor, ParallelLoader
+from utils import cos_sim, dot_prod_sim, cos_sim_softmax, custom_processor, ParallelLoader
 import wandb
 import einops
 import multiprocessing
@@ -49,16 +49,24 @@ parser.add_argument('--model', '-m', default='openai/clip-vit-base-patch32')
 parser.add_argument('--output', '-o', default=None)
 parser.add_argument('--output_results', '-r', default='prediction.txt')
 parser.add_argument('--seed', '-s', default=42, type=int)
+parser.add_argument('--no_wandb', default=False, action='store_true')
+parser.add_argument('--freeze_img_encoder', default=True, action='store_true')
+parser.add_argument('--use_smoothing', default=True, action='store_true')
+parser.add_argument('--temp', default=12, type=float)
 
 parser.add_argument('--lr', default=1e-5, type=float)
 parser.add_argument('--bs', default=32, type=int)
 parser.add_argument('--epochs', default=5, type=int)
 parser.add_argument('--val_split', default=0.15, type=float)
+parser.add_argument('--grad_acc', default=None, type=int)
 args = parser.parse_args()
+
+print('Arguments:')
+print(vars(args))
 
 seed_everything(args.seed)
 base_name = f"{args.model.replace('/', '_')}_seed={args.seed}_val_split={args.val_split}"
-name = f"{base_name}_lr={args.lr}_epochs={args.epochs}_bs={args.bs}"
+name = f"{base_name}_lr={args.lr}_epochs={args.epochs}_bs={args.bs}_grad_acc={args.grad_acc}_temp={args.temp}"
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -97,11 +105,14 @@ class CLIPWrapper(LightningModule):
     super().__init__()
     self.model = model.train()
     self.candidate_data = candidate_data
+    self.logit_scale = torch.nn.Parameter(torch.ones([]) * 2.6592)
     self.val_acc, self.val_loss, self.val_mrr = [np.array([])] * 3
 
   def forward(self, pixel_values, input_ids):
     # outputs = model(pixel_values=pixel_values, input_ids=input_ids)
-    image_outputs = model.get_image_features(pixel_values=pixel_values)
+    if args.freeze_img_encoder:
+      with torch.no_grad():
+        image_outputs = model.get_image_features(pixel_values=pixel_values)
     text_outputs = model.get_text_features(input_ids=input_ids)
     return image_outputs, text_outputs
 
@@ -125,36 +136,70 @@ class CLIPWrapper(LightningModule):
   #   dist = (y_image - y_text).norm(dim=-1, p=2)
   #   loss = labels * dist.pow(2) + (1 - labels) * torch.max(margin - dist, 0).pow(2)
   #   return loss
+
+  # contrastive loss function, adapted from
+  # https://sachinruk.github.io/blog/pytorch/pytorch%20lightning/loss%20function/gpu/2021/03/07/CLIP.html
+  def contrastive_loss(self, logits: torch.Tensor) -> torch.Tensor:
+    # print('CL LOGS:', logits.shape)
+    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
+
+  def clip_loss(self, similarity: torch.Tensor) -> torch.Tensor:
+    caption_loss = self.contrastive_loss(similarity)
+    image_loss = self.contrastive_loss(similarity.t())
+    return (caption_loss + image_loss) / 2.0
   
   '''
     y_images -> (batch_size x INST_SIZ) x 512
     y_text -> batch_size x 512
   '''
-  def compute_loss(self, y_images, y_text, gold_labels):
-    # similarity -> (batch_size x INST_SIZ) x batch_size
-    similarity = dot_prod_sim(y_images, y_text.T).T
-    ideal = torch.zeros_like(similarity)
-    batch_siz = y_text.size(0)
-
-    # TODO: is there an 'elegant' way to do this?
-    for idx in range(batch_siz):
-      label = gold_labels[idx]
-      ideal[(idx * INST_SIZ) + label, idx] = 1.
-
-    loss = F.cross_entropy(similarity, ideal)
+  def compute_loss(self, _y_images, _y_text, gold_labels):
+    y_images = _y_images / _y_images.norm(p=2, dim=-1, keepdim=True)
+    y_text = _y_text / _y_text.norm(p=2, dim=-1, keepdim=True)
+    # print('LOGS:', y_images.shape, y_text.shape)
+    logit_scale = self.logit_scale.exp()
+    logits_per_text = torch.matmul(y_text, y_images.t()) * logit_scale
+    loss = self.clip_loss(logits_per_text)
+    # print('LOGS:', logit_scale.shape, logits_per_text.shape, loss.shape)
     return loss
+
+  # def compute_loss(self, _y_images, _y_text, gold_labels):
+  #   # similarity -> (batch_size x INST_SIZ) x batch_size
+  #   y_images = _y_images / _y_images.norm(p=2, dim=-1, keepdim=True)
+  #   y_text = _y_text / _y_text.norm(p=2, dim=-1, keepdim=True)
+  #   similarity = dot_prod_sim(_y_images, _y_text.T).T
+  #   ideal = torch.zeros_like(similarity)
+  #   batch_siz = _y_text.size(0)
+
+  #   # TODO: is there an 'elegant' way to do this?
+  #   for idx in range(batch_siz):
+  #     label = gold_labels[idx]
+  #     if args.use_smoothing:
+  #       y_images_inst = _y_images[idx * INST_SIZ:(idx+1) * INST_SIZ]
+  #       y_correct = _y_images[(idx * INST_SIZ) + label].unsqueeze(dim=0)
+  #       smooth_image_similarity_dist = (dot_prod_sim(y_images_inst, y_correct.T) / args.temp).softmax(dim=1).flatten()
+  #       # print(dot_prod_sim(y_images_inst, y_correct.T), smooth_image_similarity_dist, smooth_image_similarity_dist.shape)
+  #       # ideal[(idx * INST_SIZ) + label, idx] = 1.
+  #       # assert ideal[idx * INST_SIZ:(idx+1) * INST_SIZ, idx].size(0) == image_relative_similarity.size(0)
+  #       # assert ideal[idx * INST_SIZ:(idx+1) * INST_SIZ, idx].shape == image_relative_similarity.shape, ideal[idx * INST_SIZ:(idx+1) * INST_SIZ, idx].shape == image_relative_similarity.shape 
+  #       ideal[idx * INST_SIZ:(idx+1) * INST_SIZ, idx] = smooth_image_similarity_dist
+  #     else:
+  #       ideal[(idx * INST_SIZ) + label, idx] = 1.
+
+  #   loss = F.cross_entropy(similarity, ideal)
+  #   return loss
   
   def validation_step(self, batch, batch_idx):
     gold_labels, pixel_values, input_ids, *_ = batch
-    batch_siz = input_ids.size(0)
     pixel_values = einops.rearrange(pixel_values, 'bs cands c h w -> (bs cands) c h w') # .to(device)
-    y_images, y_text = self.forward(pixel_values, input_ids)
-    y_images = y_images / y_images.norm(p=2, dim=-1, keepdim=True)
-    y_text = y_text / y_text.norm(p=2, dim=-1, keepdim=True)
-    loss = self.compute_loss(y_images, y_text, gold_labels)
+    _y_images, _y_text = self.forward(pixel_values, input_ids)
+    loss = self.compute_loss(_y_images, _y_text, gold_labels)
     self.val_loss = np.append(self.val_loss, loss.mean().cpu())
     self.log("val_loss", loss, on_epoch=True, on_step=False, prog_bar=True)
 
+    y_images = _y_images / _y_images.norm(p=2, dim=-1, keepdim=True)
+    y_text = _y_text / _y_text.norm(p=2, dim=-1, keepdim=True)
+
+    batch_siz = input_ids.size(0)
     choices = []
     acc, mrr = 0, 0
     for idx in range(batch_siz):
@@ -183,6 +228,9 @@ class CLIPWrapper(LightningModule):
   def on_validation_epoch_end(self):
     self.val_acc, self.val_loss, self.val_mrr = [np.array([])] * 3
 
+# model_wrapper = CLIPWrapper(model, candidate_data, val_siz=len(val_loader))
+# trainer.validate(model_wrapper, val_loader)
+
 def load_instance(instance_candidates):
   joined_names = '_'.join([p for p in instance_candidates])
   instance_images = [Image.open(os.path.join(args.image_dir, f)) for f in instance_candidates]
@@ -205,17 +253,32 @@ elif sum(splits) > len_d:
 
 train_set, val_set, *_ = random_split(dataset, splits)
 train_sampler = None
-train_loader = DataLoader(train_set, batch_size=args.bs, shuffle=True, sampler=train_sampler, num_workers=0)
+train_loader = DataLoader(train_set, batch_size=args.bs, shuffle=True, num_workers=0)
 val_loader = DataLoader(val_set, batch_size=args.bs, shuffle=not True, num_workers=0)
 
-proj_name = 'V-WSD'
-run = wandb.init(project=proj_name)
-run.name = name
-wandb_logger = WandbLogger(project=proj_name)
+if not args.no_wandb:
+  proj_name = 'V-WSD'
+  run = wandb.init(project=proj_name)
+  run.name = name
+  wandb_logger = WandbLogger(project=proj_name)
+else:
+  wandb_logger = None
 
 model_wrapper = CLIPWrapper(model, candidate_data, val_siz=len(val_loader))
-checkpoint_cb = ModelCheckpoint(save_top_k=2, monitor="val_accuracy", verbose=True)
-early_stopping_cb = EarlyStopping(monitor="val_accuracy", mode="max", patience=3, verbose=True)
+checkpoint_cb = ModelCheckpoint(
+  save_top_k=1,
+  monitor="val_accuracy", 
+  verbose=True,
+  filename=args.model.replace('/', '_') + "-{epoch:02d}-{val_accuracy:.4f}"
+)
+
+early_stopping_cb = EarlyStopping(
+  monitor="val_accuracy", 
+  mode="max", 
+  patience=args.epochs // 5, 
+  verbose=True, 
+)
+
 trainer = Trainer(
   logger=wandb_logger, 
   devices=1, 
@@ -223,12 +286,12 @@ trainer = Trainer(
   max_epochs=args.epochs, 
   check_val_every_n_epoch=1, 
   callbacks=[checkpoint_cb, early_stopping_cb],
-  accumulate_grad_batches=int(round(64 / args.bs))
+  # accumulate_grad_batches=args.grad_acc or int(round(256 / args.bs))
 )
 
 trainer.validate(model_wrapper, val_loader)
-trainer.fit(model_wrapper, train_loader, val_loader)
-trainer.validate(model_wrapper, val_loader)
+# trainer.fit(model_wrapper, train_loader, val_loader)
+# trainer.validate(model_wrapper, val_loader)
 
 print(f'Best model path: {checkpoint_cb.best_model_path}')
 print(f'Best model score: {checkpoint_cb.best_model_score}')

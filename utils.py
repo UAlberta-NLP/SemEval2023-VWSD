@@ -93,12 +93,14 @@ def custom_processor(images: list) -> torch.Tensor:
 
 class ParallelLoader:
   def __init__(self, data, fn, max_workers=cpu_count() - 1, save_dir='/local/storage/ogezi/v-wsd/.cache/') -> None:
+  # def __init__(self, data, fn, max_workers=cpu_count() - 1, save_dir='.cache') -> None:
     super().__init__()
     self.__shared_data = {}
     self.data = data
     self.max_workers = max_workers
     self.fn = fn
     self.save_loc = os.path.join(save_dir, 'cache_bfloat16.pt')
+    # self.save_loc = os.path.join(save_dir, 'cache.pt')
 
   def load(self) -> dict:
     if len(self.__shared_data) > 0:

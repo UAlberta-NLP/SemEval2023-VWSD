@@ -17,8 +17,8 @@ pool_funcs = ['max', 'mean'][:1]
 cache = {pf: [] for pf in pool_funcs}
 
 trial_cmd = 'python greg.py -d semeval-2023-task-1-V-WSD-train-v1/trial_v1/trial.data.v1.txt -g semeval-2023-task-1-V-WSD-train-v1/trial_v1/trial.gold.v1.txt -i semeval-2023-task-1-V-WSD-train-v1/trial_v1/trial_images_v1/ --model openai/clip-vit-base-patch32'
-k = 500
-sample_cmd = f'python greg.py -d semeval-2023-task-1-V-WSD-train-v1/sample/data.{k}.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.{k}.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32'
+k = 1000
+sample_cmd = f'python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.{k}.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.{k}.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32'
 train_cmd = 'python greg.py -d semeval-2023-task-1-V-WSD-train-v1/train_v1/train.data.v1.txt -g semeval-2023-task-1-V-WSD-train-v1/train_v1/train.gold.v1.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32'
 
 base_cmd = sample_cmd
@@ -56,9 +56,10 @@ base_cmd = sample_cmd
 cmds = []
 hyps = []
 for w_ic, w_cg, w_ig in {(0, 0, 0), (1, 0, 0), (0, 0, 1), (0, 1, 0), (1, 0, 1), (1, 1, 0), (0, 1, 1), (1, 1, 1)}:
-  cmd = f'-w_ic {w_ic} -w_cg {w_cg} -w_ig {w_ig} -pf max'
-  cmds.append(f'{base_cmd} {cmd}')
-  hyps.append(cmd)
+  for temp in [1, 10]:
+    cmd = f'-w_ic {w_ic} -w_cg {w_cg} -w_ig {w_ig} --temp {temp} -pf max'
+    cmds.append(f'{base_cmd} {cmd}')
+    hyps.append(cmd)
 
 shutil.rmtree('logs.out', ignore_errors=True)
 
@@ -70,17 +71,21 @@ def execute_cmd(tup):
   output = subprocess.check_output([f'{gpu_dev_env_var} {cmd}'], shell=True).decode('utf-8')
   splits = output.split('\n')
   print(f'Output: {output}')
+  acc, mrr = None, None
   for s in splits:
     if s.startswith('Accuracy: '):
       acc = float(s.split(': ')[1].strip())
-      output_dict[hyp] = acc
-      log.write(f'{hyp}: {acc}\n')
+    if s.startswith('MRR: '):
+      mrr = float(s.split(': ')[1].strip())
+    if mrr is not None and acc is not None:
+      output_dict[hyp] = (acc, mrr)
+      log.write(f'{hyp}: ({acc}, {mrr})\n')
       log.flush()
-      return acc
+      return acc, mrr, hyp
   return -1.
 
 with Pool(10) as pool:
   devs = [f'CUDA_VISIBLE_DEVICES={c}' for c in [0, 1]] * math.ceil(len(cmds) / 2)
   results = pool.imap_unordered(execute_cmd, zip(devs, cmds, hyps))
   for i, result in enumerate(results):
-    print(hyps[i], result)
+    print(result[-1], result[:2])

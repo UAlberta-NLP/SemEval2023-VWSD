@@ -16,3 +16,6 @@ esc
 jobs
 V-WSD
 wandb
+gen_data/*/*/*.png
+tmp
+latest_*

@@ -25,7 +25,7 @@ import argparse
 import glob
 import os
 from time import time
-from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, BertModel, BertTokenizer
+from transformers import CLIPProcessor, CLIPModel, CLIPTokenizer, BertModel, BertTokenizer, AutoModel, AutoTokenizer, AutoProcessor
 import termcolor
 import torch
 from tqdm import tqdm
@@ -46,8 +46,8 @@ from utils import cos_sim, dot_prod_sim, cos_sim_softmax
 name = sys.argv[0].replace('.py', '')
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data', '-d', default='semeval-2023-task-1-V-WSD-train-v1/train_v1/train.data.v1.txt')
-parser.add_argument('--gold', '-g', default='semeval-2023-task-1-V-WSD-train-v1/train_v1/train.gold.v1.txt')
+parser.add_argument('--data', '-d', default='semeval-2023-task-1-V-WSD-train-v1/sample/data.100.txt')
+parser.add_argument('--gold', '-g', default='semeval-2023-task-1-V-WSD-train-v1/sample/gold.100.txt')
 parser.add_argument('--image-dir', '-i', default='semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1')
 parser.add_argument('--model', '-m', default='openai/clip-vit-base-patch32')
 parser.add_argument('--bert_model', '-bm', default='bert-base-uncased')
@@ -59,10 +59,12 @@ parser.add_argument('--weight_image_gloss', '-w_ig', default=1., type=float)
 parser.add_argument('--weight_pool', '-w', default=1., type=float)
 parser.add_argument('--pool_func', '-pf', default='max', choices=['max', 'mean'])
 parser.add_argument('--wsd_type', '-t', default='consec', choices=['consec', 'amuse'])
-parser.add_argument('--wsd_input', '-wi', default='consec_train_output/only_nouns/predictions.prob.jsonl')
+parser.add_argument('--wsd_input', '-wi', default='semeval-2023-task-1-V-WSD-train-v1/sample/predictions.100.prob.jsonl')
 parser.add_argument('--use_wsd', default=False, action='store_true')
 parser.add_argument('--nouns_only', '-n', action='store_true', default=False)
 parser.add_argument('--sim', '-s', default='dot_prod_sim', choices=['dot_prod_sim', 'cos_sim', 'cos_sim_softmax'])
+parser.add_argument('--temp', default=1., type=float)
+parser.add_argument('--surround', default='"')
 args = parser.parse_args()
 
 weight_image_context = args.weight_image_context
@@ -88,9 +90,9 @@ if args.use_wsd:
   parsed_lines = [json.loads(l) for l in open(args.wsd_input).readlines()]
   wsd_in = {int(l['id']): {wn.lemma_from_key(k).synset(): p for k, p in sorted(l['probs'].items(), key=lambda x: x[1], reverse=True)} for l in parsed_lines}
 
-model = CLIPModel.from_pretrained(args.model, low_cpu_mem_usage=True).to(device)
-processor = CLIPProcessor.from_pretrained(args.model)
-tokenizer = CLIPTokenizer.from_pretrained(args.model)
+model = AutoModel.from_pretrained(args.model, low_cpu_mem_usage=True).to(device)
+processor = AutoProcessor.from_pretrained(args.model)
+tokenizer = AutoTokenizer.from_pretrained(args.model)
 bert_model = BertModel.from_pretrained(args.bert_model, low_cpu_mem_usage=True).to(device)
 bert_tokenizer = BertTokenizer.from_pretrained(args.bert_model)
 
@@ -140,6 +142,7 @@ def lex_sub(focus, context) -> tuple:
   # print(len(gen_contexts), gen_contexts)
   return len(gen_contexts), gen_contexts
 
+a, b, c = [], [], []
 out = open(args.output, 'w')
 sense_counts = []
 ranks = []
@@ -162,6 +165,7 @@ with torch.no_grad():
       else:
         gloss = ('an ' if gloss.lower()[0] in 'aeiou' else 'a ') + gloss
       return f'{article} {word} is {gloss}'
+      # return gloss
 
     word, context, *image_paths = instance
     word_tokens = bert_tokenizer(word).input_ids[1:-1]
@@ -171,10 +175,10 @@ with torch.no_grad():
     images = [Image.open(os.path.join(args.image_dir, i)) for i in image_paths]
     # len_c, extra_contexts = lex_sub(word, context)
     # print(extra_contexts)
-    len_c, extra_contexts = 1, [context]
+    len_c, extra_contexts = 1, [context.replace(word, f'{args.surround}{word}{args.surround}')]
     # extra_contexts = list(set(extra_contexts))
     len_c = len(extra_contexts)
-    inputs = processor(text=extra_contexts + glosses, images=images, return_tensors="pt", padding=True, truncation=True).to(device)
+    inputs = processor(text=[extra_contexts + glosses], images=images, return_tensors="pt", padding=True, truncation=True).to(device)
     outputs = model(**inputs)
     # bert_inputs = bert_tokenizer(context + glosses, return_tensors='pt', padding=True, truncation=True).to(device)
     # bert_outputs = bert_model(**bert_inputs)
@@ -205,6 +209,21 @@ with torch.no_grad():
     # mean_focus_word_rep = hidden_states[:l][:, start:end].mean(dim=1)
     # context_bert_embeds = last_hidden_states[:len_c]
     # gloss_bert_embeds = last_hidden_states[len_c:]
+    
+    # _context_embeds = outputs.text_embeds[:len_c]
+    # _context_embeds = context_embeds.mean(dim=0)
+    # _img_embeds = outputs.image_embeds[:]
+    # _gloss_embeds = outputs.text_embeds[len_c:]
+
+    # _context_embeds = model.get_text_features(inputs.input_ids)[:len_c]
+    # _context_embeds = _context_embeds.mean(dim=0)
+    # _img_embeds = model.get_image_features(inputs.pixel_values)
+    # _gloss_embeds = model.get_text_features(inputs.input_ids)[len_c:]
+    # t = (_img_embeds @ _context_embeds.T) @ (_img_embeds @ _gloss_embeds.T)
+    # a.append(t / t.norm())
+    # t = (_context_embeds @ _gloss_embeds.T)
+    # b.append(t / t.norm())
+    # c.append(sim(a[i], b[i].T) if (len(a[i])+len(b[i])) > 0 else 1.)
 
     # print(img_embeds.shape, context_embeds.shape, gloss_embeds.shape)
     sim_image_context = sim(img_embeds, context_embeds.T).T
@@ -212,23 +231,49 @@ with torch.no_grad():
     # sim_context_gloss_bert = sim(mean_focus_word_rep, gloss_bert_embeds.T).T
     sim_image_gloss = sim(img_embeds, gloss_embeds.T).T
 
-    pool_func=np.max
+    def renorm(probs: dict, temp=args.temp):
+      vals = torch.tensor(list(probs.values()))
+      logits = torch.log(vals)
+      logits /= temp
+      return {k: x for k, x in zip(probs.keys(), logits.softmax(dim=0))}
+
+    # pool_func = np.max
     scores = []
+    # print(word, len_g)
+    # print(glosses)
+    # print('sim_image_gloss =', sim_image_gloss)
+    # print('sim_context_gloss =', sim_context_gloss)
+    # print('sim_image_context =', sim_image_context)
     for idx in range(len(images)):
       if len_g > 0:
-        # if args.use_wsd and i in wsd_in:
-        #   probs = wsd_in[i]
-        #   score = weight_image_context * sim_image_context[idx].item() \
-        #     + weight_pool * pool_func([weight_context_gloss * probs[synsets[g]] + weight_image_gloss * sim_image_gloss[idx, g].item() for g in range(len_g)])
-        # else:
+        if args.use_wsd and i in wsd_in:
+          # print('X')
+          # print(sim_image_context.shape, sim_context_gloss.shape, sim_image_gloss.shape)
+          probs = wsd_in[i]
+          # if idx == 0:
+          #   print(word in (list(probs.keys())[0].lemma_names()[0]), list(probs.keys())[0].lemma_names()[0], word, probs)
+          #   print(probs)
+          probs = renorm(probs)
+          # if idx == 0:
+          #   print(probs)
+          # print(probs, word)
+          # print(idx, weight_image_context * sim_image_context[idx].item())
+          # print([weight_context_gloss * probs[synsets[g]] for g in range(len_g)])
+          # print([weight_image_gloss * sim_image_gloss[idx, g].item() for g in range(len_g)])
+          score = weight_image_context * sim_image_context[idx].item() \
+            + weight_pool * pool_func([weight_context_gloss * probs[synsets[g]] + weight_image_gloss * sim_image_gloss[idx, g].item() for g in range(len_g)])
+        else:
+          # print('Y')
           # print(sim_image_context.shape, sim_context_gloss.shape, sim_image_gloss.shape)
           score = weight_image_context * sim_image_context[idx].item() \
-            + weight_pool * pool_func([weight_context_gloss * sim_context_gloss[:, g].item() + weight_image_gloss * sim_image_gloss[idx, g].item() for g in range(len_g)])
+            + weight_pool * pool_func([weight_context_gloss * sim_context_gloss[g].item() \
+            + weight_image_gloss * sim_image_gloss[idx, g].item() for g in range(len_g)])
       else:
       # if True:
         score = weight_image_context * sim_image_context[idx].item()
       scores.append(score)
     scores = torch.tensor(scores)
+    # print(scores.argmax(), scores.argsort(descending=True), scores)
 
     best = image_paths[scores.argmax().item()]
     preds = np.array(image_paths)[scores.argsort(descending=True)].tolist()

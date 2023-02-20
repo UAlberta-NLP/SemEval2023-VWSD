@@ -1,0 +1,90 @@
+Executing: CUDA_VISIBLE_DEVICES=0 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 1 -w_cg 0 -w_ig 1 --temp 1 -pf max
+Output: 
+Accuracy: 0.806
+MRR: 0.8818527777777777
+
+Executing: CUDA_VISIBLE_DEVICES=1 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 1 -w_cg 0 -w_ig 1 --temp 20 -pf max
+Output: 
+Accuracy: 0.806
+MRR: 0.8818527777777777
+
+Executing: CUDA_VISIBLE_DEVICES=0 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 0 -w_cg 0 -w_ig 0 --temp 1 -pf max
+Output: 
+Accuracy: 0.101
+MRR: 0.3031662698412699
+
+Executing: CUDA_VISIBLE_DEVICES=0 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 0 -w_cg 1 -w_ig 0 --temp 1 -pf max
+Output: 
+Accuracy: 0.101
+MRR: 0.3031662698412699
+
+Executing: CUDA_VISIBLE_DEVICES=0 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 1 -w_cg 0 -w_ig 0 --temp 1 -pf max
+Output: 
+Accuracy: 0.727
+MRR: 0.8239289682539682
+
+Executing: CUDA_VISIBLE_DEVICES=1 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 1 -w_cg 0 -w_ig 0 --temp 20 -pf max
+Output: 
+Accuracy: 0.727
+MRR: 0.8239289682539682
+
+Executing: CUDA_VISIBLE_DEVICES=1 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 1 -w_cg 1 -w_ig 0 --temp 20 -pf max
+Output: 
+Accuracy: 0.727
+MRR: 0.8239289682539682
+
+Executing: CUDA_VISIBLE_DEVICES=1 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 0 -w_cg 1 -w_ig 0 --temp 20 -pf max
+Output: 
+Accuracy: 0.101
+MRR: 0.3031662698412699
+
+Executing: CUDA_VISIBLE_DEVICES=0 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 0 -w_cg 0 -w_ig 1 --temp 1 -pf max
+Output: 
+Accuracy: 0.729
+MRR: 0.8097492063492063
+
+Executing: CUDA_VISIBLE_DEVICES=1 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 1 -w_cg 1 -w_ig 1 --temp 20 -pf max
+Output: 
+Accuracy: 0.809
+MRR: 0.8840345238095237
+
+Executing: CUDA_VISIBLE_DEVICES=0 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 0 -w_cg 1 -w_ig 1 --temp 1 -pf max
+Output: 
+Accuracy: 0.734
+MRR: 0.8131337301587301
+
+Executing: CUDA_VISIBLE_DEVICES=1 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 0 -w_cg 1 -w_ig 1 --temp 20 -pf max
+Output: 
+Accuracy: 0.734
+MRR: 0.8130242063492064
+
+Executing: CUDA_VISIBLE_DEVICES=0 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 1 -w_cg 1 -w_ig 0 --temp 1 -pf max
+Output: 
+Accuracy: 0.727
+MRR: 0.8239289682539682
+
+Executing: CUDA_VISIBLE_DEVICES=1 python greg_simple.py --use_wsd -n -d semeval-2023-task-1-V-WSD-train-v1/sample/data.1000.txt -g semeval-2023-task-1-V-WSD-train-v1/sample/gold.1000.txt -i semeval-2023-task-1-V-WSD-train-v1/train_v1/train_images_v1/ --model openai/clip-vit-base-patch32 -w_ic 0 -w_cg 0 -w_ig 1 --temp 20 -pf max
+Output: 
+Accuracy: 0.729
+MRR: 0.8097492063492063
+
+
+>>> (img_embeds @ context_embeds.T) @ (img_embeds @ gloss_embeds.T)
+tensor([0.3656, 0.3620], device='cuda:0')
+>>> (context_embeds @ gloss_embeds.T)
+tensor([0.8603, 0.8454], device='cuda:0')
+
+[1.0, 1.0, 0.0, 1.0, 0.9999918937683105, 0.9985736608505249, 0.9988961815834045, 0.9998818039894104, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.9952067136764526, 1.0, 0.9976863861083984, 1.0, 0.9993662238121033, 0.9999179840087891]
+
+tensor([1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 0.9986, 0.9989, 0.9999, 1.0000,
+        1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 0.9952, 1.0000, 0.9977, 1.0000,
+        0.9994, 0.9999, 1.0000, 1.0000, 0.9994, 1.0000, 1.0000, 1.0000, 0.9999,
+        0.9997, 1.0000, 0.9981, 0.9998, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+        1.0000, 0.9981, 1.0000, 0.9986, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+        1.0000, 1.0000, 0.9994, 1.0000, 0.9998, 0.9934, 0.9982, 1.0000, 0.9995,
+        1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+        0.9999, 1.0000, 1.0000, 1.0000, 1.0000, 0.9999, 1.0000, 0.9999, 1.0000,
+        1.0000, 0.9978, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 0.9994,
+        1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+        1.0000, 1.0000, 0.9932, 0.9984, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000,
+        1.0000])
